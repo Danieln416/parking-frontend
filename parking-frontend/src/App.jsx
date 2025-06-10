@@ -1,9 +1,25 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Car, ParkingCircle, Plus, BarChart3, Settings, LogOut, User, Clock, FileText as DocumentText } from 'lucide-react';
+import { Car, ParkingCircle, Plus, BarChart3, LogOut, User, Clock, FileText as DocumentText } from 'lucide-react';
 import PropTypes from 'prop-types';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:3000/api';
+
+// Configuración de Axios
+axios.defaults.headers.common['Cache-Control'] = 'no-cache';
+axios.defaults.headers.common['Pragma'] = 'no-cache';
+
+// Interceptor para logs
+axios.interceptors.response.use(
+  response => {
+    console.log(`Response from ${response.config.url}:`, response.data);
+    return response;
+  },
+  error => {
+    console.error(`Error from ${error.config.url}:`, error.response);
+    return Promise.reject(error);
+  }
+);
 
 // Login Component
 const LoginForm = ({ onLogin, onToggleForm }) => {
@@ -20,7 +36,6 @@ const LoginForm = ({ onLogin, onToggleForm }) => {
       const response = await axios.post(`${API_BASE_URL}/auth/login`, credentials);
       const { token } = response.data;
       
-      // Configurar axios para futuras peticiones
       axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
       
       onLogin(token);
@@ -87,10 +102,6 @@ const LoginForm = ({ onLogin, onToggleForm }) => {
             >
               {loading ? 'Iniciando sesión...' : 'Iniciar Sesión'}
             </button>
-          </div>
-          <div className="text-sm text-gray-500">
-            <p><strong>Credenciales de prueba:</strong></p>
-            <p>Operador: operador@uptc.com / operador123</p>
           </div>
         </form>
         <div className="text-center mt-4">
@@ -270,41 +281,46 @@ const ParkingDashboard = ({ token, onLogout }) => {
     observaciones: ''
   });
 
-  // Configure axios defaults
-  useEffect(() => {
-    axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-  }, [token]);
-
-  // Fetch data on component mount
-  const fetchData = useCallback(async () => {
+  const fetchData = async () => {
     setLoading(true);
     try {
-      const [clientsRes, spacesRes, vehiclesRes, registrosRes, reportsRes] = await Promise.all([
+      // Forzar revalidación agregando timestamp
+      const timestamp = new Date().getTime();
+      const [clientsRes, spacesRes, vehiclesRes] = await Promise.all([
         axios.get(`${API_BASE_URL}/clientes`),
-        axios.get(`${API_BASE_URL}/espacios`),
-        axios.get(`${API_BASE_URL}/vehiculos`),
-        axios.get(`${API_BASE_URL}/registros`),
-        axios.get(`${API_BASE_URL}/reportes`)
+        axios.get(`${API_BASE_URL}/espacios?t=${timestamp}`),
+        axios.get(`${API_BASE_URL}/vehiculos`)
       ]);
       
-      setClients(clientsRes.data || []);
-      setSpaces(spacesRes.data || []);
-      setVehicles(vehiclesRes.data || []);
-      setRegistros(registrosRes.data || []);
-      setReports(reportsRes.data || []);
+      console.log('Espacios raw:', spacesRes);
+      console.log('Espacios data:', spacesRes.data);
+
+      // Asegurarse de que los datos son arrays y tienen la estructura correcta
+      const espaciosData = Array.isArray(spacesRes.data) ? spacesRes.data : [];
+      
+      // Log para depuración
+      console.log('Espacios procesados:', espaciosData);
+      console.log('Espacios disponibles:', espaciosData.filter(space => space.estado === 'disponible'));
+
+      setSpaces(espaciosData);
+      setClients(Array.isArray(clientsRes.data) ? clientsRes.data : []);
+      setVehicles(Array.isArray(vehiclesRes.data) ? vehiclesRes.data : []);
     } catch (error) {
-      console.error('Error fetching data:', error);
-      if (error.response?.status === 401) {
-        onLogout();
+      console.error('Error en fetchData:', error);
+      if (error.response) {
+        console.error('Error response:', error.response.data);
       }
     } finally {
       setLoading(false);
     }
-  }, [onLogout]);
+  };
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    if (token) {
+      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+      fetchData();
+    }
+  }, [token]);
 
   const handleAddVehicle = async () => {
     if (!newVehicle.placa || !newVehicle.tipo) {
@@ -315,7 +331,7 @@ const ParkingDashboard = ({ token, onLogout }) => {
     try {
       const vehiculoData = {
         placa: newVehicle.placa,
-        tipoVehiculo: newVehicle.tipo.toLowerCase(), // Convertir a lowercase para coincidir con el enum
+        tipoVehiculo: newVehicle.tipo.toLowerCase(),
         clienteId: newVehicle.clienteId || undefined
       };
 
@@ -323,6 +339,7 @@ const ParkingDashboard = ({ token, onLogout }) => {
       setVehicles(prevVehicles => [...prevVehicles, response.data]);
       setNewVehicle({ placa: '', tipo: 'carro', clienteId: '' });
       alert('Vehículo registrado exitosamente');
+      fetchData(); // Agregar aquí para actualizar después de añadir
     } catch (error) {
       console.error('Error adding vehicle:', error);
       alert(error.response?.data?.error || 'Error al registrar el vehículo');
@@ -354,7 +371,7 @@ const ParkingDashboard = ({ token, onLogout }) => {
         observaciones: ''
       });
       alert('Registro de entrada creado exitosamente');
-      fetchData(); 
+      await fetchData(); // Agregar aquí para actualizar después de crear
     } catch (error) {
       console.error('Error creating registro:', error);
       alert(error.response?.data?.error || 'Error al crear el registro de entrada');
@@ -370,14 +387,14 @@ const ParkingDashboard = ({ token, onLogout }) => {
         )
       );
       alert(`Registro finalizado. Total a pagar: ${formatCurrency(response.data.valorTotal)}`);
-      fetchData();
+      await fetchData(); // Agregar aquí para actualizar después de finalizar
     } catch (error) {
       console.error('Error finalizing registro:', error);
       alert(error.response?.data?.error || 'Error al finalizar el registro');
     }
   };
 
-  // Función para eliminar vehículo
+  //eliminar vehículo
   const handleDeleteVehicle = async (id) => {
     try {
       await axios.delete(`${API_BASE_URL}/vehiculos/${id}`);
@@ -389,7 +406,7 @@ const ParkingDashboard = ({ token, onLogout }) => {
     }
   };
 
-  // Función para generar reporte
+  //generar reporte
   const handleGenerateReport = async () => {
     try {
       const response = await axios.post(`${API_BASE_URL}/reportes`, {
@@ -404,7 +421,7 @@ const ParkingDashboard = ({ token, onLogout }) => {
     }
   };
 
-  // Función para eliminar reporte
+  //eliminar reporte
   const handleDeleteReport = async (id) => {
     try {
       await axios.delete(`${API_BASE_URL}/reportes/${id}`);
@@ -422,7 +439,6 @@ const ParkingDashboard = ({ token, onLogout }) => {
   const occupiedSpots = spaces.filter(s => !s.disponible).length;
   const activeRegistros = registros.filter(r => r.estado === 'activo');
 
-  // Función de formato de moneda
   const formatCurrency = (amount) => {
     return new Intl.NumberFormat('es-CO', {
       style: 'currency',
@@ -430,14 +446,6 @@ const ParkingDashboard = ({ token, onLogout }) => {
       minimumFractionDigits: 0
     }).format(amount);
   };
-
-  // eslint-disable-next-line no-unused-vars
-  const formatDuration = (minutes) => {
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    return `${hours}h ${mins}m`;
-  };
-
   return (
     <div className="min-h-screen bg-gray-50">
       {loading ? (
@@ -454,10 +462,6 @@ const ParkingDashboard = ({ token, onLogout }) => {
                 <h1 className="text-2xl font-bold text-gray-900">ParkingManager</h1>
               </div>
               <div className="flex items-center space-x-4">
-                <button className="px-4 py-2 border border-gray-300 rounded-lg text-sm hover:bg-gray-50">
-                  <Settings className="h-4 w-4 mr-2 inline" />
-                  Configuración
-                </button>
                 <button onClick={onLogout} className="px-4 py-2 border border-gray-300 rounded-lg text-sm hover:bg-gray-50">
                   <LogOut className="h-4 w-4 mr-2 inline" />
                   Cerrar Sesión
@@ -568,11 +572,10 @@ const ParkingDashboard = ({ token, onLogout }) => {
               </div>
             </div>
 
-            {/* Tab Content */}
             {activeTab === 'registro' && (
               <div className="space-y-6">
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                  {/* Create Registro Form */}
+                  {/* formulario de registro*/}
                   <div className="bg-white p-6 rounded-lg shadow">
                     <div className="mb-4">
                       <h3 className="text-lg font-medium text-gray-900 flex items-center">
@@ -588,16 +591,23 @@ const ParkingDashboard = ({ token, onLogout }) => {
                         </label>
                         <select
                           id="clienteRegistro"
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md"
                           value={newRegistro.clienteId}
-                          onChange={(e) => setNewRegistro({ ...newRegistro, clienteId: e.target.value })}
+                          onChange={(e) => {
+                            console.log('Cliente seleccionado:', e.target.value);
+                            setNewRegistro({ ...newRegistro, clienteId: e.target.value });
+                          }}
                         >
                           <option value="">Seleccionar cliente</option>
-                          {clients.map((client) => (
-                            <option key={client._id} value={client._id}>
-                              {client.nombre} - {client.documento}
-                            </option>
-                          ))}
+                          {clients && clients.length > 0 ? (
+                            clients.map((client) => (
+                              <option key={client._id} value={client._id}>
+                                {client.nombre} - {client.documento}
+                              </option>
+                            ))
+                          ) : (
+                            <option value="" disabled>No hay clientes disponibles</option>
+                          )}
                         </select>
                       </div>
                       <div>
@@ -613,7 +623,7 @@ const ParkingDashboard = ({ token, onLogout }) => {
                           <option value="">Seleccionar vehículo</option>
                           {vehicles.map((vehicle) => (
                             <option key={vehicle._id} value={vehicle._id}>
-                              {vehicle.placa} - {vehicle.tipo}
+                              {vehicle.placa} - {vehicle.tipoVehiculo}
                             </option>
                           ))}
                         </select>
@@ -624,16 +634,22 @@ const ParkingDashboard = ({ token, onLogout }) => {
                         </label>
                         <select
                           id="espacioId"
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md"
                           value={newRegistro.espacioId}
                           onChange={(e) => setNewRegistro({ ...newRegistro, espacioId: e.target.value })}
                         >
                           <option value="">Seleccionar espacio</option>
-                          {spaces.filter(space => space.disponible).map((space) => (
-                            <option key={space._id} value={space._id}>
-                              {space.numero} - {space.tipo}
-                            </option>
-                          ))}
+                          {spaces && spaces.length > 0 ? (
+                            spaces
+                              .filter(space => space && space.estado === 'disponible')
+                              .map((space) => (
+                                <option key={space._id} value={space._id}>
+                                  {space.codigo || space.numero} - {space.tipoEspacio}
+                                </option>
+                              ))
+                          ) : (
+                            <option value="" disabled>No hay espacios disponibles</option>
+                          )}
                         </select>
                       </div>
                       <div>
@@ -830,7 +846,6 @@ const ParkingDashboard = ({ token, onLogout }) => {
             {activeTab === 'parking' && (
               <div className="space-y-6">
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                  {/* Parking Spaces Overview */}
                   <div className="bg-white p-6 rounded-lg shadow">
                     <div className="mb-4">
                       <h3 className="text-lg font-medium text-gray-900">Estado del Parqueadero</h3>
@@ -853,8 +868,6 @@ const ParkingDashboard = ({ token, onLogout }) => {
                       </div>
                     </div>
                   </div>
-
-                  {/* Active Registrations in Parking Lot */}
                   <div className="bg-white p-6 rounded-lg shadow lg:col-span-2">
                     <div className="mb-4">
                       <h3 className="text-lg font-medium text-gray-900">Registro de Parqueo Activo</h3>
