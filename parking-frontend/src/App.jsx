@@ -3,7 +3,7 @@ import axios from 'axios';
 import { Car, ParkingCircle, Plus, BarChart3, LogOut, User, Clock, FileText as DocumentText } from 'lucide-react';
 import PropTypes from 'prop-types';
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:3000/api';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
 
 // Configuración de Axios
 axios.defaults.headers.common['Cache-Control'] = 'no-cache';
